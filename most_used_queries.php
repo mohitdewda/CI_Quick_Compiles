@@ -1,10 +1,5 @@
 <?php
-/**
-*	Select Query 
-*
-*	Using result()
-*	@returns Std Object
-*/
+/* Select Query, Using result(), @returns Std Object */
 
 	$this->db->from('');
 	$this->db->where('', $identifier);
