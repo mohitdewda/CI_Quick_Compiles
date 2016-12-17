@@ -12,12 +12,16 @@
 	$data = $query->result();
 	
 	/*
-		Data format
-		$data = array(
-			[0]=> stdObject(
-				''->..,
-				''->..,
-				''->..
-				)
-		)
+	Data format
+	$data = array(
+		[0]=> stdObject(
+			''->..,
+			''->..,
+		),
+		[1]=> stdObject(
+			''->..,
+			''->..,
+		),		
+		..
+	)
 	*/
