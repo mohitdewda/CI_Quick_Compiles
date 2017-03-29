@@ -1,0 +1,527 @@
+<?php defined('BASEPATH') OR exit('No direct script access allowed');
+// This can be removed if you use __autoload() in config.php OR use Modular Extensions
+/** @noinspection PhpIncludeInspection */
+require_once( APPPATH . 'vendor/facebook/graph-sdk/src/Facebook/autoload.php' );
+//using official facebook google php sdks
+
+class User extends My_Controller {
+
+	/*
+	* Facebook connection instance
+	*/
+	private static $_fb = null;
+  private static $_redirect_url = 'http://localhost/zoplay/user/fb_callback';
+
+  /*
+	* Google connection instance
+	*/
+	private static $_google = null;
+
+	public function __construct() 
+	{
+		parent::__construct();
+		
+		$this->store_salt = true;
+		$this->salt_length = 6;
+
+		$this->load->library('Google');
+		$this->load->library('Facebook');
+		
+		self::$_google =  $this->google->create_con_instance();
+
+		if(self::$_fb != ''){
+			//self::$_fb = $fb;
+		}else{
+			$fb = new Facebook\Facebook([
+			  'app_id' => '1055822624564476',
+			  'app_secret' => 'f4be97c22d990526b845384a6f9a317f',
+			  'default_graph_version' => 'v2.5',
+			]);
+
+			self::$_fb = $fb;
+		}
+
+	}
+
+	protected $salt = 'k32duem01vZsQ2lB8g0s';
+	
+	public function logout_get() {
+		if($_google != null){
+			$_google->revokeToken();
+
+		}
+
+    $this->session->sess_destroy();
+    $this->session->set_flashdata('alert', array('status' =>true, 'message'=>'<i class="fa fa-check"></i> You have been logged out successfully!', 'type' => 'logout'));
+    redirect('user/login',' refresh');
+  }
+
+	public function index_get()
+	{
+		//$this->login_get();
+	}
+	
+	public function login_get()
+	{
+		$data = array();
+    $seo = array();
+
+
+    $seo['url'] = site_url("Information");
+    $seo['title'] = lang('logintext') . " - " . WEBSITENAME;
+    $seo['metatitle'] = lang('textmetatitle') . " - " . WEBSITENAME;
+    $seo['metadescription'] = lang('textmetadescription') . " - " . WEBSITENAME;
+
+    $data['data']['seo'] = $seo;
+		$data['layout'] = $this->frontLayout2($data);
+    $data['layout'] = $this->frontLayout($data);
+
+
+    $data['data']['fb_login_url'] = $this->login_url();
+    $data['data']['google_login_url'] = $this->google->create_auth_url(self::$_google);
+
+    $this->load->view("login.tpl", $data);
+	}
+	
+	public function log_user_post(){
+		
+		//redirect($this->agent->referrer());
+		//validating
+		$this->form_validation->set_error_delimiters('', '');
+		$this->form_validation->set_rules('emaill', 'Email', 'required|valid_email');
+		$this->form_validation->set_rules('passwordl', 'Password', 'required');
+
+		if ($this->form_validation->run() == FALSE){
+			$return = array(
+				'status' => FALSE,
+				'message'	=>'<i class="fa fa-close"></i> Error in validating fields',
+				'errorMsg' => array(
+					'email' => form_error('email'),
+					'password' => form_error('password')
+				)
+			);
+			
+			$this->response($return, parent::HTTP_INTERNAL_SERVER_ERROR); 
+			// INTERNAL SERVER ERROR (500) being the HTTP response code
+		}else{
+			$email = $this->input->post('emaill');
+			$password = $this->hash_password($this->input->post('passwordl'));
+			$role = 'user';
+			
+			//check is email is verified
+			$verified  =$this->CommonModel->select_data_where('users',array('email'=>$email, 'is_email_verified'=>1,'admin_approved_status'=>1, 'role'=>$role));
+			
+			if($verified){
+				
+				$log_data = $this->CommonModel->doLogin($email, $password,$role);
+				
+				 
+				if($log_data != false){
+					$u = $verified->result_array()[0];
+					$userdata = array(
+						'userData' => $u , 
+						'loggedIn'=>true ,
+						'user_id' => $u['id']
+					);
+					if ($this->input->post('backurl')!='')
+					{
+						$urlstring = $this->input->post('backurl');
+						$returnto = site_url().base64_decode($urlstring);
+					}
+					else{
+						$returnto=site_url();
+					}
+						
+					$this->session->set_userdata('user', $userdata);
+					//$token = $this->issueAToken( $u['id'] , $email);
+					$return = array('status' => true, 'message' => '<i class="fa fa-check"></i> Logged successfully!','data' => $returnto );
+					
+					$this->response($return, parent::HTTP_OK); // OK (200) being the HTTP response code
+				}else{
+					$return = array('status' => false , 'message' => '<i class="fa fa-times"></i> Invalid Credentials!', 'errorMsg'=>'');
+					$this->response($return, parent::HTTP_INTERNAL_SERVER_ERROR); // INTERNAL SERVER ERROR (500) being the HTTP response code
+				}
+			}else{
+				//updating last login time
+				
+				$update_time = $this->CommonModel->update_data('users',array('last_login_time' => gettime4db()), array('email'=>$email, 'role'=>$role));
+				
+				$return = array('status' => false, 'message' => '<i class="fa fa-times"></i> Your account is waiting approval. Verify your email!', 'errorMsg'=>'');
+				$this->response($return, parent::HTTP_INTERNAL_SERVER_ERROR); // INTERNAL SERVER ERROR (500) being the HTTP response code
+			}
+			
+		}
+	}
+	
+	public function hash_password($password)
+	{
+		if (empty($password))
+	    {
+				return false;
+	    }else{				
+				$salt = $this->salt;
+				$salt = sha1(md5($password)).$salt; 
+				$password = md5($password.$salt);
+				return $password;
+			}		
+	}
+	
+	public function register_post() 
+	{
+	   $this->form_validation->set_rules('username', 'Username', 'trim|required');
+       $this->form_validation->set_rules('password', 'Password', 'trim|required');
+       $this->form_validation->set_rules('passconf', 'Password Confirmation', 
+       'trim|required|matches[password]');
+       $this->form_validation->set_rules('email','Email','required|is_unique[users.email]');
+       $this->form_validation->set_message('is_unique', 'The %s is already taken');
+       $this->form_validation->set_rules('phone','Phone Number','required|min_length[10]|max_length[10]');
+	   $this->form_validation->set_message('min_length', '%s: the minimum of characters is %s');
+
+       if($this->form_validation->run() == false){
+			$errors = array(
+				'username'	=> form_error('username', '<p class="text text-danger error">','</p>'),
+				'password'	=> form_error('password', '<p class="text text-danger error">','</p>'),
+				'passconf'	=> form_error('passconf', '<p class="text text-danger error">','</p>'),
+				'phone'	=> form_error('phone', '<p class="text text-danger error">','</p>'),
+				'email'	=> form_error('email', '<p class="text text-danger error">','</p>')
+			);
+			
+			$cat = array(
+				'status'	=> 	false,
+				'message'	=>	'<i class="fa fa-times"></i> Validation Errors',
+				'data'		=>	$errors
+			);
+			
+			
+			$this->response($cat, parent::HTTP_INTERNAL_SERVER_ERROR);
+		}else{	
+			//$salt	= $this->store_salt ? $this->salt() : false;
+			$password   = $this->hash_password($_POST['password']);	
+			$email=$this->input->post('email');
+			$insert = array(
+						'user_name'	=> $this->input->post('username'),
+						'email'	=> $this->input->post('email'),
+						'contact'	=> $this->input->post('phone'),
+						'password'	=> $password,
+						'role'	=> 'user',
+						'is_email_verified'	=> 1,
+						'user_updated'	=> date("Y-m-d H:i:s"),
+						'user_created'	=> date("Y-m-d H:i:s")
+					);
+					$this->db->insert('users', $insert);
+					
+					if($this->db->affected_rows() > 0){
+						
+						//Email Verfication Mail
+						$randomtoken  = md5(rand(1,10));
+						$resetlink = site_url(). "User/email_verification?token=$randomtoken";
+						$e_id = 1;
+								
+						$html = '<html>
+						<head>
+							<title>Email Verification</title>
+						</head>
+						<body>
+						<table border="0" width="100%" cellspacing="0" cellpadding="0" bgcolor="#F0F0F0">
+						<tbody>
+						<tr>
+						<td style="background-color: #f0f0f0;" align="center" valign="top" bgcolor="#F0F0F0"><br />
+						<table class="container" style="width: 598px; max-width: 600px; height: 387px;" border="0" width="600" cellspacing="0" cellpadding="0">
+						<tbody>
+						<tr>
+						<td class="container-padding header" style="font-family: Helvetica, Arial, sans-serif; font-size: 24px; font-weight: bold; padding-bottom: 12px; color: #df4726; padding-left: 24px; padding-right: 24px;" align="left">Flipmart</td>
+						</tr>
+						<tr>
+						<td class="container-padding content" style="background-color: #ffffff; padding: 12px 24px 12px 24px;" align="left"><br />
+						<div class="title" style="font-family: Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 600; color: #374550;">Greetings!</div>
+						<br />
+						<div class="body-text" style="font-family: Helvetica, Arial, sans-serif; font-size: 14px; line-height: 20px; text-align: left; color: #333333;">Thanks For Registration From Flipmart. <br /><br />Please Click On this Link to Verify Your Email-id And Account To Enjoy Over Services.</div>
+						<div class="body-text" style="font-family: Helvetica, Arial, sans-serif; font-size: 14px; line-height: 20px; text-align: left; color: #333333;">&nbsp;</div>
+						<a href="'.$resetlink.'"><div class="body-text" style="font-family: Helvetica, Arial, sans-serif; font-size: 14px; background: #42a5f5; text-align: center; margin: 0% 44%; padding: 6px 10px; border-radius: 4px; color: #fff;">Verify</div></a>
+						</td>
+						</tr>
+						<tr>
+						<td class="container-padding footer-text" style="font-family: Helvetica, Arial, sans-serif; font-size: 12px; line-height: 16px; color: #aaaaaa; padding-left: 24px; padding-right: 24px;" align="left"><br />Flipmart.com&nbsp;&copy; 2017. <br /><br /><strong>Acme, Inc.</strong><br /><span class="ios-footer"> 456 Main St.<br /> Springfield, DF 12345<br /></span>www.Flipmart.com<br /><br /></td>
+						</tr>
+						</tbody>
+						</table>
+						</td>
+						</tr>
+						</tbody>
+						</table>
+						</body>
+						</html>';
+								
+						// To send HTML mail, the Content-type header must be set
+						$headers[] = 'MIME-Version: 1.0';
+						$headers[] = 'Content-type: text/html; charset=iso-8859-1';
+
+						// Additional headers
+						$headers[] = 'From: Flipmart <noreply@Flipmart.com>';
+						
+						//$sent = mail($email, 'Please Verify Your Account', $html, implode("\r\n", $headers));
+						/* if($sent){     
+							$id = $this->db->update('users', array('email_verification_token'=>$randomtoken) ,array('email'=>$email));
+							
+							$alerts = array(
+							'status'	=> 	true,
+							'message'	=>	'<i class="fa fa-check"></i> An email was just sent to'. $email. 'Please click the link provided in the email to reset your password.',
+							'data'		=>	''
+						);
+							
+						}else{
+							
+							$alerts = array(
+							'status'	=> 	false,
+							'message'	=>	'<i class="fa fa-time"></i> The Email Was Not Sent',
+							'data'		=>	''
+						);
+						} */
+						
+						$alerts = array(
+							'status'	=> 	true,
+							'message'	=>	'<i class="fa fa-check"></i> Signup Successfull',
+							'data'		=>	''
+						);
+						
+						
+					}else{
+						$alerts = array(
+							'status'	=> 	false,
+							'message'	=>	'<i class="fa fa-times"></i> Something went wrong.Please Try Again!',
+							'data'		=>	''
+						);
+					}
+			$cat = $alerts;
+			$this->response($cat, parent::HTTP_OK);
+		}       
+  }
+	public function email_verification_get($token){
+		$data = $this->UserModel->email_verification($token);
+		
+		if($data){
+			//match found 
+			$this->UserModel->email_verification(null ,$data[0]->id);
+		?>
+		
+		<center><h1> Your email is verified . Redirecting to the  main site ......</h1></center>
+		<script>
+			setTimeout(function(){ window.location.replace("<?php echo site_url();?>"); }, 3000);
+		</script>	
+		
+		<?php
+			exit ;
+		}else{
+		?>
+		
+		<center><h1> Invalid token! Please verify again. Redirecting to the  main site ......</h1></center>
+		<script>
+		   window.location.replace("<?php echo site_url();?>");
+		</script>	
+		
+		<?php
+		}
+	}
+		
+
+	
+
+	/**
+   * Returns the login URL for facebook login
+   */
+  public function login_url()
+  {
+    // Add `use Facebook\FacebookRedirectLoginHelper;` to top of file
+    $helper = self::$_fb->getRedirectLoginHelper();
+    $permissions = ['email', 'user_likes']; // optional
+    $loginUrl = $helper->getLoginUrl(self::$_redirect_url, $permissions);
+ 
+    return $loginUrl;
+    // Use the login url on a link or button to
+    // redirect to Facebook for authentication
+  }
+
+  /**
+  *	Callbaack page for facebook sign in response
+  *
+  *
+  */
+	public function fb_callback_get(){
+
+		$helper = self::$_fb->getRedirectLoginHelper();
+		try {
+		  $accessToken = $helper->getAccessToken();
+		} catch(Facebook\Exceptions\FacebookResponseException $e) {
+		  // When Graph returns an error
+		  echo 'Graph returned an error: ' . $e->getMessage();
+		  exit;
+		} catch(Facebook\Exceptions\FacebookSDKException $e) {
+		  // When validation fails or other local issues
+		  echo 'Facebook SDK returned an error: ' . $e->getMessage();
+		  exit;
+		}
+
+		if (isset($accessToken)) {
+			//print_r($accessToken);die;
+		  // Logged in!
+		 	$this->session->set_userdata('fb_token_user', $accessToken) ;
+		 	$this->login('user');
+		  // Now you can redirect to another page and use the
+		  // access token from $_SESSION['facebook_access_token']
+		}
+
+	}
+
+	public function google_callback_get(){
+		if ($this->input->get('code')) {
+			self::$_google->authenticate($this->input->get('code'));
+			$this->session->set_userdata('google_token_user', self::$_google->getAccessToken());
+		 
+		 	$this->login('user', 'google');
+
+		}else{
+			echo "Something went wrong";
+		}
+	}
+
+	public function get_user_google(){
+		if ($this->session->userdata('google_token_user')) {
+		  self::$_google->setAccessToken($this->session->userdata('google_token_user'));
+
+		  $plus = new Google_Service_Oauth2(self::$_google);
+		  $user = $plus->userinfo->get();
+
+		} else {
+		  $user = false;
+		}
+		return $user;
+	}
+
+	/**
+	*	Gets users data from facebook is fb_token is set
+	*
+	*/
+	public function get_user()
+  {
+    if ( $this->session->userdata('fb_token_user'))
+    {
+    	$token = $this->session->userdata('fb_token_user');
+
+    	self::$_fb->setDefaultAccessToken($token);
+
+      try {
+			  $response = self::$_fb->get('/me?fields=email,name,gender');
+			  $userNode = $response->getGraphUser();
+			  return $userNode;
+			} catch(Facebook\Exceptions\FacebookResponseException $e) {
+			  // When Graph returns an error
+			  $userNode = 'Graph returned an error: ' . $e->getMessage();
+			} catch(Facebook\Exceptions\FacebookSDKException $e) {
+			  // When validation fails or other local issues
+			  $userNode = 'Facebook SDK returned an error: ' . $e->getMessage();
+			}
+    }
+    return false;
+  }
+
+
+  /**
+	* Author : Himanshu
+	*	Check, inserts or updates profile with fb
+  */
+  public function login($role = null, $type = null){
+  	if($type == 'google'){
+  		$user = $this->get_user_google();
+  	}else{
+    	$user = $this->get_user();
+  	}
+    if($user != false){
+     $result = $this->CommonModel->select_data_where( 'users', array('email'=> $user['email'], 'role'=> $role ))->result();
+
+      if ( ! $result ){
+        // Not registered.
+        $user['role'] = $role;
+        $user['type'] = 'facebook';
+        if($type == 'google'){
+        	$user['type'] = 'google'; 
+        }
+        $data['user'] = $user;
+
+        $this->load->view('social_callback.php', $data);
+
+      }else{
+      	$user_data = $this->CommonModel->doLogin( $result[0]->email, $result[0]->password , $role);
+        if ( $user_data ){
+        	$session = array(
+        		'userData' => $result[0],
+        		'loggedIn'	=> true,
+        		'user_id'	=> $user_data->id
+        	);
+        	$this->session->set_userdata($role, $session);
+          redirect( base_url('user/dashboard'));
+        }else{
+          die( 'Unable to login!' );
+          redirect( base_url() );
+        }
+      }
+ 		}else{
+ 			die('No data received!');
+ 		}
+  }
+
+
+	public function set_remaining_data_post(){
+		$this->form_validation->set_rules('name','Name','trim|required');
+	  $this->form_validation->set_rules('password','Password','trim|required');
+	  $this->form_validation->set_rules('r_password','Repeat password','trim|required|matches[password]');
+	  $this->form_validation->set_rules('email','Email','trim|required|valid_email|is_unique[users.email]');
+
+    if($this->form_validation->run() == false){
+			$errors = array(
+				'err_name'	=> form_error('name', '<p class="text error text-danger">','</p>'),
+				'err_password'	=> form_error('password', '<p class="text error text-danger">','</p>'),
+				'err_r_password'	=> form_error('r_password', '<p class="text error text-danger">','</p>'),
+				'err_email'	=> form_error('email', '<p class="text error text-danger">','</p>')
+			);
+
+			$this->response(array('status' => true, 'message'=> '<i class="f fa-times"></i> Error in validating fields!', 'data' => $errors ), parent::HTTP_INTERNAL_SERVER_ERROR);
+		}else{
+			$data = array(
+				'full_name' => $this->input->post('name'),
+				'email' => $this->input->post('email'),
+				'password' => $this->hash_password($this->input->post('password')),
+				'role' => $this->input->post('role'),
+				'gender' => $this->input->post('gender'),
+				'status' => 1,
+				'admin_approved_status' => 1,
+				'is_email_verified' => 1,
+				'user_created'=>date("Y-m-d H:i:s"),
+				'user_updated'=>date("Y-m-d H:i:s"),
+				'oauth_provider'=>$this->input->post('type'),
+				'oauth_id'=>$this->input->post('id')
+			);
+			$role= $data['role'];
+			$ret = $this->CommonModel->insert_data('users',$data, 'return ');
+
+			if($ret != false){
+				$data = $this->CommonModel->select_data_where('users', array('id' => $ret, 'role'=> $data['role']))->result();
+
+				$session = array(
+					'userData'	=> $data[0],
+					'loggedIn'	=> true,
+					'user_id'		=> $data[0]->id
+				);
+
+				//setting session
+				$this->session->set_userdata($role, $session);
+
+				$this->response(array('status' => true, 'message' => '<i class="fa fa-check"></i> Registered successfully. Please wait while we are logging you!'), parent::HTTP_OK);
+
+
+			}else{
+				$this->response(array('status' => false, 'message' => '<i class="fa fa-times"></i> Something went wrong! Please try again'), parent::HTTP_INTERNAL_SERVER_ERROR);
+			}
+		}
+	}
+	
+}
