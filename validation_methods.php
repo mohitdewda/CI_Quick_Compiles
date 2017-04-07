@@ -5,6 +5,7 @@ $this->load->helper(array('form', 'url'));
 $this->load->library('form_validation');
 
 /* set rules */
+$this->form_validation->set_error_delimiters('', '');
 $this->form_validation->set_rules('field_name', 'Alias for field_name', 'required');
 $this->form_validation->set_rules('email', 'Email', 'required|valid_email');
 $this->form_validation->set_rules('password', 'Password', 'required');
